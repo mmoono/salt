@@ -72,7 +72,7 @@ def state(name,
         saltenv=None,
         test=False,
         pillar=None,
-        expect_minions=False,
+        expect_minions=True,
         fail_minions=None,
         allow_fail=0,
         concurrent=False,
@@ -232,6 +232,9 @@ def state(name,
 
     if pillar:
         cmd_kw['kwarg']['pillar'] = pillar
+
+    if __opts__.get('pillarenv'):
+        cmd_kw['kwarg']['pillarenv'] = __opts__['pillarenv']
 
     cmd_kw['kwarg']['saltenv'] = __env__
     cmd_kw['kwarg']['queue'] = queue

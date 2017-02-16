@@ -19,6 +19,7 @@ import salt.crypt
 import salt.transport
 import salt.utils.url
 import salt.utils.cache
+import salt.utils.crypt
 from salt.exceptions import SaltClientError
 from salt.template import compile_template
 from salt.utils.dictupdate import merge
@@ -33,7 +34,7 @@ log = logging.getLogger(__name__)
 
 
 def get_pillar(opts, grains, minion_id, saltenv=None, ext=None, funcs=None,
-               pillar=None, pillarenv=None, rend=None):
+               pillar=None, pillarenv=None):
     '''
     Return the correct pillar driver based on the file_client option
     '''
@@ -49,7 +50,7 @@ def get_pillar(opts, grains, minion_id, saltenv=None, ext=None, funcs=None,
         return PillarCache(opts, grains, minion_id, saltenv, ext=ext, functions=funcs,
                 pillar=pillar, pillarenv=pillarenv)
     return ptype(opts, grains, minion_id, saltenv, ext, functions=funcs,
-                 pillar=pillar, pillarenv=pillarenv, rend=rend)
+                 pillar=pillar, pillarenv=pillarenv)
 
 
 # TODO: migrate everyone to this one!
@@ -128,7 +129,7 @@ class RemotePillar(object):
     Get the pillar from the master
     '''
     def __init__(self, opts, grains, minion_id, saltenv, ext=None, functions=None,
-                 pillar=None, pillarenv=None, *args, **kwargs):
+                 pillar=None, pillarenv=None):
         self.opts = opts
         self.opts['environment'] = saltenv
         self.ext = ext
@@ -268,7 +269,7 @@ class Pillar(object):
     Read over the pillar top files and render the pillar data
     '''
     def __init__(self, opts, grains, minion_id, saltenv, ext=None, functions=None,
-                 pillar=None, pillarenv=None, rend=None):
+                 pillar=None, pillarenv=None):
         self.minion_id = minion_id
         self.ext = ext
         if pillarenv is None:
@@ -295,10 +296,7 @@ class Pillar(object):
             self.functions = functions
 
         self.matcher = salt.minion.Matcher(self.opts, self.functions)
-        if rend is None:
-            self.rend = salt.loader.render(self.opts, self.functions)
-        else:
-            self.rend = rend
+        self.rend = salt.loader.render(self.opts, self.functions)
         ext_pillar_opts = copy.deepcopy(self.opts)
         # Fix self.opts['file_roots'] so that ext_pillars know the real
         # location of file_roots. Issue 5951
@@ -873,7 +871,70 @@ class Pillar(object):
                            self.opts.get('renderer', 'yaml'),
                            self.opts.get('pillar_merge_lists', False))
 
+        decrypt_errors = self.decrypt_pillar(pillar)
+        if decrypt_errors:
+            pillar.setdefault('_errors', []).extend(decrypt_errors)
         return pillar
+
+    def decrypt_pillar(self, pillar):
+        '''
+        Decrypt the specified pillar dictionary items, if configured to do so
+        '''
+        errors = []
+        if self.opts.get('decrypt_pillar'):
+            decrypt_pillar = self.opts['decrypt_pillar']
+            if not isinstance(decrypt_pillar, dict):
+                decrypt_pillar = \
+                    salt.utils.repack_dictlist(self.opts['decrypt_pillar'])
+            if not decrypt_pillar:
+                errors.append('decrypt_pillar config option is malformed')
+            for key, rend in six.iteritems(decrypt_pillar):
+                ptr = salt.utils.traverse_dict(
+                    pillar,
+                    key,
+                    default=None,
+                    delimiter=self.opts['decrypt_pillar_delimiter'])
+                if ptr is None:
+                    log.debug('Pillar key %s not present', key)
+                    continue
+                try:
+                    hash(ptr)
+                    immutable = True
+                except TypeError:
+                    immutable = False
+                try:
+                    ret = salt.utils.crypt.decrypt(
+                        ptr,
+                        rend or self.opts['decrypt_pillar_default'],
+                        renderers=self.rend,
+                        opts=self.opts,
+                        valid_rend=self.opts['decrypt_pillar_renderers'])
+                    if immutable:
+                        # Since the key pointed to an immutable type, we need
+                        # to replace it in the pillar dict. First we will find
+                        # the parent, and then we will replace the child key
+                        # with the return data from the renderer.
+                        parent, _, child = key.rpartition(
+                            self.opts['decrypt_pillar_delimiter'])
+                        if not parent:
+                            # key is a top-level key, so the pointer to the
+                            # parent is the pillar dict itself.
+                            ptr = pillar
+                        else:
+                            ptr = salt.utils.traverse_dict(
+                                pillar,
+                                parent,
+                                default=None,
+                                delimiter=self.opts['decrypt_pillar_delimiter'])
+                        if ptr is not None:
+                            ptr[child] = ret
+                except Exception as exc:
+                    msg = 'Failed to decrypt pillar key \'{0}\': {1}'.format(
+                        key, exc
+                    )
+                    errors.append(msg)
+                    log.error(msg, exc_info=True)
+        return errors
 
 
 # TODO: actually migrate from Pillar to AsyncPillar to allow for futures in

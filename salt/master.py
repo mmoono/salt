@@ -957,7 +957,7 @@ class AESFuncs(object):
         self.mminion = salt.minion.MasterMinion(
             self.opts,
             states=False,
-            rend=True,
+            rend=False,
             ignore_config_errors=True
         )
         self.__setup_fileserver()
@@ -971,6 +971,7 @@ class AESFuncs(object):
         self._serve_file = self.fs_.serve_file
         self._file_find = self.fs_._find_file
         self._file_hash = self.fs_.file_hash
+        self._file_hash_and_stat = self.fs_.file_hash_and_stat
         self._file_list = self.fs_.file_list
         self._file_list_emptydirs = self.fs_.file_list_emptydirs
         self._dir_list = self.fs_.dir_list
@@ -1332,8 +1333,7 @@ class AESFuncs(object):
             load.get('saltenv', load.get('env')),
             ext=load.get('ext'),
             pillar=load.get('pillar_override', {}),
-            pillarenv=load.get('pillarenv'),
-            rend=self.mminion.rend)
+            pillarenv=load.get('pillarenv'))
         data = pillar.compile_pillar(pillar_dirs=pillar_dirs)
         self.fs_.update_opts()
         if self.opts.get('minion_data_cache', False):
@@ -1918,7 +1918,7 @@ class ClearFuncs(object):
             name = self.loadauth.load_name(clear_load)
             groups = self.loadauth.get_groups(clear_load)
             eauth_config = self.opts['external_auth'][clear_load['eauth']]
-            if '*' not in eauth_config and name not in eauth_config:
+            if '^model' not in eauth_config and '*' not in eauth_config and name not in eauth_config:
                 found = False
                 for group in groups:
                     if "{0}%".format(group) in eauth_config:
@@ -2018,7 +2018,7 @@ class ClearFuncs(object):
                             break
             except KeyError:
                 pass
-            if '*' not in eauth_users and token['name'] not in eauth_users \
+            if '^model' not in eauth_users and '*' not in eauth_users and token['name'] not in eauth_users \
                 and not group_auth_match:
                 log.warning('Authentication failure of type "token" occurred.')
                 return ''

@@ -28,13 +28,13 @@ to replace references to ``dockerng`` with ``docker``.
 Installation Prerequisites
 --------------------------
 
-This execution module requires at least version 1.4.0 of both docker-py_ and
-Docker_. docker-py can easily be installed using :py:func:`pip.install
-<salt.modules.pip.install>`:
+This execution module requires at least version 1.6.0 of docker-py_ and
+version 1.9.0 of Docker_. docker-py can easily be installed using
+:py:func:`pip.install <salt.modules.pip.install>`:
 
 .. code-block:: bash
 
-    salt myminion pip.install docker-py>=1.4.0
+    salt myminion pip.install docker-py>=1.6.0
 
 .. _docker-py: https://pypi.python.org/pypi/docker-py
 .. _Docker: https://www.docker.com/
@@ -333,8 +333,8 @@ __func_alias__ = {
 }
 
 # Minimum supported versions
-MIN_DOCKER = (1, 6, 0)
-MIN_DOCKER_PY = (1, 4, 0)
+MIN_DOCKER = (1, 9, 0)
+MIN_DOCKER_PY = (1, 6, 0)
 
 VERSION_RE = r'([\d.]+)'
 
@@ -565,6 +565,9 @@ VALID_CREATE_OPTS = {
             'Type': None,
             'Config': {},
         }
+    },
+    'devices': {
+        'path': 'HostConfig:Devices',
     },
 }
 
@@ -1211,7 +1214,7 @@ def _error_detail(data, item):
     '''
     err = item['errorDetail']
     if 'code' in err:
-        msg = '{1}: {2}'.format(
+        msg = '{0}: {1}'.format(
             item['errorDetail']['code'],
             item['errorDetail']['message'],
         )
@@ -1872,6 +1875,20 @@ def _validate_input(kwargs,
         if log_config_config and not isinstance(log_config_config, dict):
             raise SaltInvocationError(
                 'log_config[\'config\'] must be of type \'dict\''
+            )
+
+    def _valid_devices():  # pylint: disable=unused-variable
+        '''
+        Must be a list of devices
+        '''
+        if kwargs.get('devices') is None:
+            return
+
+        try:
+            _valid_stringlist('devices')
+        except SaltInvocationError:
+            raise SaltInvocationError(
+                'devices must be a comma-separated list or Python list'
             )
 
     def _valid_labels():  # pylint: disable=unused-variable
@@ -2819,10 +2836,10 @@ def create(image,
 
         Example: ``tty=True``
 
-    detach : True
+    detach : False
         If ``True``, run ``command`` in the background (daemon mode)
 
-        Example: ``detach=False``
+        Example: ``detach=True``
 
     user
         User under which to run docker
@@ -3081,12 +3098,34 @@ def create(image,
         Example: ``pid_mode=host``
 
     log_config
-        Set container's log driver and options
+        Set container's logging driver and options to override the Docker
+        daemon default logging driver. Requires Docker 1.6 or newer.
 
-        Example: ``log_conf:
-                     Type: json-file
-                     Config:
-                       max-file: '10'``
+        Example:
+
+        .. code-block:: yaml
+
+            log_config:
+                Type: syslog
+                Config:
+                    syslog-address: tcp://192.168.0.42
+                    syslog-facility: daemon
+
+        .. note::
+
+            The logging driver feature was improved in Docker 1.13 introducing
+            option name changes. Please see Docker's
+            `Configure logging drivers`_ documentation for more information.
+
+        .. _`Configure logging drivers`: https://docs.docker.com/engine/admin/logging/overview/
+
+    devices
+        List of host devices to expose within the container
+
+        Example: ``devices:
+                     - /dev/net/tun
+                     - /dev/xvda1:/dev/xvda1
+                     - /dev/xvdb1:/dev/xvdb1:r``
 
     **RETURN DATA**
 
@@ -4621,7 +4660,7 @@ def inspect_network(network_id):
 
 @_api_version(1.21)
 @_client_version('1.5.0')
-def connect_container_to_network(container, network_id):
+def connect_container_to_network(container, network_id, ipv4_address=None):
     '''
     Connect container to network.
 
@@ -4631,6 +4670,9 @@ def connect_container_to_network(container, network_id):
     network_id
         ID of network
 
+    ipv4_address
+        The IPv4 address to connect to the container
+
     CLI Example:
 
     .. code-block:: bash
@@ -4639,7 +4681,8 @@ def connect_container_to_network(container, network_id):
     '''
     response = _client_wrapper('connect_container_to_network',
                                container,
-                               network_id)
+                               network_id,
+                               ipv4_address)
     _clear_context()
     # Only non-error return case is a True return, so just return the response
     return response
@@ -5764,7 +5807,9 @@ def call(name, function, *args, **kwargs):
         raise CommandExecutionError('Missing function parameter')
 
     # move salt into the container
-    thin_path = salt.utils.thin.gen_thin(__opts__['cachedir'])
+    thin_path = salt.utils.thin.gen_thin(__opts__['cachedir'],
+                                         extra_mods=__salt__['config.option']("thin_extra_mods", ''),
+                                         so_mods=__salt__['config.option']("thin_so_mods", ''))
     with io.open(thin_path, 'rb') as file:
         _client_wrapper('put_archive', name, thin_dest_path, file)
     try:
@@ -5874,13 +5919,31 @@ def sls(name, mods=None, saltenv='base', **kwargs):
 
 
 def sls_build(name, base='opensuse/python', mods=None, saltenv='base',
-              **kwargs):
+              dryrun=False, **kwargs):
     '''
     Build a docker image using the specified sls modules and base image.
 
     For example, if your master defines the states ``web`` and ``rails``, you
     can build a docker image inside myminion that results of applying those
     states by doing:
+
+    base
+        the base image
+
+    mods
+        the state modules to execute during build
+
+    saltenv
+        the salt environment to use
+
+    dryrun: False
+        when set to True the container will not be commited at the end of
+        the build. The dryrun succeed also when the state contains errors.
+
+    **RETURN DATA**
+
+    A dictionary with the ID of the new container. In case of a dryrun,
+    the state result is returned and the container gets removed.
 
     CLI Example:
 
@@ -5914,9 +5977,12 @@ def sls_build(name, base='opensuse/python', mods=None, saltenv='base',
         # Now execute the state into the container
         ret = __salt__['dockerng.sls'](id_, mods, saltenv, **kwargs)
         # fail if the state was not successful
-        if not salt.utils.check_state_result(ret):
+        if not dryrun and not salt.utils.check_state_result(ret):
             raise CommandExecutionError(ret)
     finally:
         __salt__['dockerng.stop'](id_)
 
+    if dryrun:
+        __salt__['dockerng.rm'](id_)
+        return ret
     return __salt__['dockerng.commit'](id_, name)

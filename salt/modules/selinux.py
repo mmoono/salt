@@ -100,6 +100,27 @@ def getenforce():
         return 'Disabled'
 
 
+def getconfig():
+    '''
+    Return the selinux mode from the config file
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' selinux.getconfig
+    '''
+    try:
+        config = '/etc/selinux/config'
+        with salt.utils.fopen(config, 'r') as _fp:
+            for line in _fp:
+                if line.strip().startswith('SELINUX='):
+                    return line.split('=')[1].capitalize().strip()
+    except (IOError, OSError, AttributeError):
+        return None
+    return None
+
+
 def setenforce(mode):
     '''
     Set the SELinux enforcing mode
@@ -345,7 +366,7 @@ def _context_string_to_dict(context):
     return ret
 
 
-def filetype_id_to_string(filetype='a'):
+def _filetype_id_to_string(filetype='a'):
     '''
     Translates SELinux filetype single-letter representation
     to a more human-readable version (which is also used in `semanage fcontext -l`).
@@ -386,7 +407,7 @@ def fcontext_get_policy(name, filetype=None, sel_type=None, sel_user=None, sel_l
                   'sel_role': '[^:]+',  # se_role for file context is always object_r
                   'sel_type': sel_type or '[^:]+',
                   'sel_level': sel_level or '[^:]+'}
-    cmd_kwargs['filetype'] = '[[:alpha:] ]+' if filetype is None else filetype_id_to_string(filetype)
+    cmd_kwargs['filetype'] = '[[:alpha:] ]+' if filetype is None else _filetype_id_to_string(filetype)
     cmd = 'semanage fcontext -l | egrep ' + \
           "'^{filespec}{spacer}{filetype}{spacer}{sel_user}:{sel_role}:{sel_type}:{sel_level}$'".format(**cmd_kwargs)
     current_entry_text = __salt__['cmd.shell'](cmd)

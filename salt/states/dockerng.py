@@ -433,6 +433,23 @@ def _compare(actual, create_kwargs, defaults_from_image):
             if data != actual_data:
                 ret.update({item: {'old': actual_data, 'new': data}})
             continue
+        elif item == 'devices':
+            if data:
+                keys = ['PathOnHost', 'PathInContainer', 'CgroupPermissions']
+                modified_data = []
+                for index, device_info in enumerate(data):
+                    data_device_info = dict(list(six.zip(keys, device_info.split(':'))))
+                    try:
+                        actual_data_device_info = actual_data[index]
+                    except IndexError:
+                        continue
+                    for key, value in actual_data_device_info.items():
+                        data_device_info[key] = data_device_info.get(key, value)
+                    modified_data.append(data_device_info)
+                data = modified_data
+            if data != actual_data:
+                ret.update({item: {'old': actual_data, 'new': data}})
+                continue
         elif item in ('cmd', 'command', 'entrypoint'):
             if (actual_data is None and item not in create_kwargs and
                     _image_get(config['image_path'])):
@@ -963,7 +980,7 @@ def running(name,
                 - image: bar/baz:latest
                 - tty: True
 
-    detach : True
+    detach : False
         If ``True``, run the container's command in the background (daemon
         mode)
 
@@ -972,7 +989,7 @@ def running(name,
             foo:
               dockerng.running:
                 - image: bar/baz:latest
-                - detach: False
+                - detach: True
 
     user
         User under which to run docker
@@ -1562,6 +1579,29 @@ def running(name,
             docker-py 1.7.0 or newer.
 
         .. versionadded:: 2016.11.0
+
+    log_config
+        Set container's logging driver and options to override the Docker
+        daemon default logging driver. Requires Docker 1.6 or newer.
+
+        .. code-block:: yaml
+
+            foo:
+              dockerng.running:
+                - image: bar/baz:latest
+                - log_config:
+                    Type: syslog
+                    Config:
+                      syslog-address: tcp://192.168.0.42
+                      syslog-facility: daemon
+
+        .. note::
+
+            The logging driver feature was improved in Docker 1.13 introducing
+            option name changes. Please see Docker's
+            `Configure logging drivers`_ documentation for more information.
+
+        .. _`Configure logging drivers`: https://docs.docker.com/engine/admin/logging/overview/
     '''
     ret = {'name': name,
            'changes': {},
