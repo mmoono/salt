@@ -164,7 +164,7 @@ def present(host, groups, interfaces, templates=None, **kwargs):
         hosttemplates = __salt__['zabbix.template_get'](hostids=hostid, **kwargs)
         cur_templates = list()
 
-        if not hosttemplates and not templates is None:
+        if not hosttemplates and templates is not None:
             update_templates = True
         elif not hosttemplates and templates is None:
             update_templates = False
